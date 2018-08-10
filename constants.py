@@ -9,7 +9,7 @@ LOG_FILE = 'logs'
 INITIAL_ALPHA_LOW = 1e-4    # log_uniform low limit for learning rate
 INITIAL_ALPHA_HIGH = 1e-2   # log_uniform high limit for learning rate
 
-PARALLEL_SIZE = 16 # parallel thread size
+PARALLEL_SIZE = 32 # parallel thread size
 ACTION_SIZE = 4 # action size
 
 INITIAL_ALPHA_LOG_RATE = 0.4226 # log_uniform interpolate rate for learning rate (around 7 * 10^-4)
@@ -36,6 +36,9 @@ TASK_LIST = {
 '''
 
 
+
+ 
+
 TASK_LIST = {
     'living_room_08': ['92', '135', '193', '228', '132', '251', '303', '13'],
   'bathroom_02'    : ['26', '37', '43', '53', '69']
@@ -47,6 +50,7 @@ TEST_TASK_LIST = {
     'living_room_08': ['92', '135', '193', '228']
 
 }
+
 
 
 EVAL_INIT_LOC = 433

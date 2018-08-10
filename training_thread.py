@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+
 import tensorflow as tf
 import numpy as np
 import random
@@ -6,6 +6,7 @@ import time
 import sys
 
 from utils.accum_trainer import AccumTrainer
+from utils.accum_trainer_d import AccumTrainer_d
 from scene_loader import THORDiscreteEnvironment as Environment
 from network import ActorCriticFFNetwork
 from discrim import Discriminator_WGAN
@@ -32,9 +33,13 @@ class A3CTrainingThread(object):
                grad_applier_discriminator,
                max_global_time_step,
                device,
+               device2,
                network_scope="network",
                scene_scope="scene",
                task_scope="task"):
+
+
+
 
     self.thread_index = thread_index
     self.learning_rate_input = learning_rate_input
@@ -46,7 +51,7 @@ class A3CTrainingThread(object):
     self.task_scope = task_scope
     self.scopes = [network_scope, scene_scope, task_scope]
 
-    self.scopes_d=[self.network_scope_D, scene_scope, task_scope]
+    self.scopes_d=[self.network_scope_D,task_scope]
 
     self.local_network = ActorCriticFFNetwork(
                            action_size=ACTION_SIZE,
@@ -83,47 +88,53 @@ class A3CTrainingThread(object):
     #If this is unstable it is desireable to first apply the gradients on the local network and then clip and after that we apply
     self.sync = self.local_network.sync_from(global_network) #this is to sync from the glocal network Apply updated global params to the local network
 
-   
 
 
 #This part is for the Discriminator
 #########################################################################################
-                                                                                     # 
+                                                                                        # 
     self.local_discriminator = Discriminator_WGAN(                                      #
                            action_size=ACTION_SIZE,                                     # 
-                           device="/cpu:0",                                             #  
+                           device=device,                                               #  
                            network_scope=network_scope,                                 #
                            scene_scopes=[scene_scope])                                  #
                                                                                         #
     self.local_discriminator.prepare_loss_D(ENTROPY_BETA, self.scopes_d)                #           
                                                                                         #
-    self.trainer_D = AccumTrainer(device="/cpu:0",name="AccumTrainer_d")                #
+    self.trainer_D = AccumTrainer_d(device=device,name="AccumTrainer_d")                #
                                                                                         #
     self.trainer_D.prepare_minimize(self.local_discriminator.total_loss_d,              #
                                   self.local_discriminator.get_vars())                  #
                                                                                         #
                                                                                         #
     self.accum_gradients_d = self.trainer_D.accumulate_gradients()                      #
-    self.reset_gradients_d = self.trainer_D.reset_gradients()                           #
+    self.reset_gradients_d = self.trainer_D.reset_gradients()   
+
+                          #
                                                                                         #
     accum_grad_names_discrimi = [self._local_var_name(x) for x in self.trainer_D.get_accum_grad_list()]
                                                                                         #
                                                                                         #
     global_discri_vars = [x for x in global_discriminator.get_vars() if self._get_accum_grad_name(x) in accum_grad_names_discrimi]
+    local_discri_vars = [x for x in self.local_discriminator.get_vars() if self._get_accum_grad_name(x) in accum_grad_names_discrimi]
                                                                                         #
-    self.apply_gradients_discriminator=grad_applier_discriminator.apply_gradients(global_discri_vars, self.trainer_D.get_accum_grad_list())
+    self.apply_gradients_discriminator=grad_applier_discriminator.apply_gradients(local_discri_vars, self.trainer_D.get_accum_grad_list()) #applying grad to the LOCAL network
+
                                                                                         #    
-    self.clip_global_d_weights = global_discriminator.clip_weights() #here we are clipping the global net weights directly. 
+    self.clip_local_d_weights = self.local_discriminator.clip_weights() #here we are clipping the global net weights directly. 
                                                                                         #
-    self.sync_discriminator =self.local_discriminator.sync_from(global_discriminator)  #
-                                                                                        #                                                                                #
-    self.D_var=global_discriminator.get_vars()                                                                                    #
+    self.sync_discriminator_l_G =self.local_discriminator.sync_to(global_discriminator) #
+    self.sync_discriminator_G_l =self.local_discriminator.sync_from(global_discriminator)
+                                                                                        #                                 
+    self.D_var_G=global_discriminator.get_vars()  
+    self.D_var_l=self.local_discriminator.get_vars()                                    #              
+                                                                                        #
                                                                                         #
 #########################################################################################                                                                                       
 
 
 
-
+    
 
     self.env = None
     self.local_t = 0
@@ -207,13 +218,19 @@ class A3CTrainingThread(object):
 
     terminal_end = False #in the start terminal state_end is false
 
-    # reset accumulated gradients
+   
     sess.run(self.reset_gradients) #resetting the gradient positions when starting the process for each Iteration
+    sess.run(self.sync) # copy weights from shared to local
 
-    # copy weights from shared to local
-    sess.run(self.sync)
 
-    start_local_t = self.local_t
+    #dicriminator sync
+    ##########################
+    sess.run(self.sync_discriminator_G_l) #Copy the weights from the sharead to the local
+    sess.run(self.reset_gradients_d) #resetting the gradients of the discriminator slosts
+    ########################
+
+
+    start_local_t = self.local_t 
     self.oracle = ShortestPathOracle(self.env_Oracle, ACTION_SIZE)
 
     #########################################################################################
@@ -235,10 +252,12 @@ class A3CTrainingThread(object):
 
       if terminal_o:
         break
+
     ##############################################################################################
 
     # t_max times loop
     for i in range(LOCAL_T_MAX): #one thread will run for maximum amoound to 5 iterations then do a gradiet uodate
+
 
       pi_, value_ = self.local_network.run_policy_and_value(sess, self.env.s_t, self.env.target, self.scopes)
     
@@ -280,9 +299,14 @@ class A3CTrainingThread(object):
 
       # s_t1 -> s_t
       self.env.update()
+
+     
+
+
       
       if terminal: #if we go to the terminal state we will surely break the function
-        sys.stdout.write("Pi = {0} V = {1}\n".format(pi_, value_))
+        score=self.local_discriminator.run_critic(sess, states, targets,actions, self.scopes_d)
+        sys.stdout.write("Critic_Score = {0}".format(score))
         terminal_end = True
         sys.stdout.write("time %d | thread #%d | scene %s | target #%s\n%s %s episode reward = %.3f\n%s %s episode length = %d\n%s %s episode max Q  = %.3f\n" % (global_t, self.thread_index, self.scene_scope, self.task_scope, self.scene_scope, self.task_scope, self.episode_reward, self.scene_scope, self.task_scope, self.episode_length, self.scene_scope, self.task_scope, self.episode_max_q))
 
@@ -356,12 +380,9 @@ class A3CTrainingThread(object):
 
  
 
+    for i in range(10):
 
-
-    
-    for i in range(5):
-
-      sess.run(self.reset_gradients_d)
+      #sess.run(self.reset_gradients_d)
    
       sess.run(self.accum_gradients_d, #since we update the algorithm for given action ,given state, given advatns and given value and given reward we do not care about the sequence
               feed_dict = {
@@ -374,17 +395,23 @@ class A3CTrainingThread(object):
 
       
       sess.run(self.apply_gradients_discriminator, #directly gradients get apply on the global discri
-              feed_dict = { self.learning_rate_input: cur_learning_rate } )
+              feed_dict = { self.learning_rate_input:0.00005} )
 
-      sess.run(self.clip_global_d_weights) #every update make sure u clip weihtfs
-    
-      sess.run(self.sync_discriminator) #from the Global Discriminator we sync to the local
+      loss=sess.run(self.local_discriminator.total_loss_d,
+              feed_dict = {
+              self.local_discriminator.s_e: batch_si_ex,
+              self.local_discriminator.Actions_e: batch_a_ex,
+              self.local_discriminator.s_a: batch_si_d,
+              self.local_discriminator.Actions_a: batch_actions_d,
+              self.local_discriminator.t_e: batch_t_ex,
+              self.local_discriminator.t_a: batch_t_d })
 
-      
+
+      sess.run(self.clip_local_d_weights) #every update make sure u clip weihtfs
 
 
-    critic_r = self.local_discriminator.run_critic(sess, batch_si_d, batch_t_d,batch_actions_d, self.scopes_d)   
-   
+
+    critic_r = self.local_discriminator.run_critic(sess, batch_si_d, batch_t_d,batch_actions_d, self.scopes_d)
     critic_r=critic_r*0.1
  
     rewards=rewards+critic_r  #We concatenate the rewrds function 
@@ -428,7 +455,7 @@ class A3CTrainingThread(object):
     sess.run(self.apply_gradients,
               feed_dict = { self.learning_rate_input: cur_learning_rate } )
 
-   
+    sess.run(self.sync_discriminator_l_G) #syncing the paramters from the local network to the global newok
 
     if VERBOSE and (self.thread_index == 0) and (self.local_t % 100) == 0:
       sys.stdout.write("Local timestep %d\n" % self.local_t)

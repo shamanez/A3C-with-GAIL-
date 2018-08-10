@@ -37,6 +37,7 @@ class Discriminator(object):
     dst_vars = self.get_vars() #Slave - current thread
     clip_ops = []  #This is sync_ops
 
+
     with tf.device(self._device):
       with tf.name_scope("clipWeights", []) as name:
         for src_var in dst_vars: 
@@ -85,7 +86,7 @@ class Discriminator(object):
     return '/'.join(scopes)
 
 
-  def sync_from(self, src_netowrk, name=None):
+  def sync_to(self, src_netowrk, name=None):
     src_vars = src_netowrk.get_vars() #Master net - This is the common networ
     dst_vars = self.get_vars() #Slave - current thread
     
@@ -102,12 +103,37 @@ class Discriminator(object):
     sync_ops = []  #This is sync_ops
 
     with tf.device(self._device):
-      with tf.name_scope(name, "Discriminator", []) as name:
+      with tf.name_scope(name, "Discriminator_l_g", []) as name:
         for(src_var, dst_var) in zip(src_vars, dst_vars): 
-          sync_op = tf.assign(dst_var, src_var)  #apply the updated Master network variables to the slave network variables
+          sync_op = tf.assign(src_var,dst_var )  #apply the updated slave(local) network variables to the Master(global) network variables
           sync_ops.append(sync_op)
 
         return tf.group(*sync_ops, name=name)
+
+
+  def sync_from(self, src_netowrk, name=None):
+    src_vars = src_netowrk.get_vars() #Master net - This is the common networ
+    dst_vars = self.get_vars() #Slave - current thread
+    
+    local_src_var_names = [self._local_var_name(x) for x in src_vars]
+    local_dst_var_names = [self._local_var_name(x) for x in dst_vars]
+
+    # keep only variables from both src and dst
+    src_vars = [x for x in src_vars
+      if self._local_var_name(x) in local_dst_var_names]
+    dst_vars = [x for x in dst_vars
+      if self._local_var_name(x) in local_src_var_names]
+
+
+    sync_ops_G = []  #This is sync_ops
+
+
+    with tf.device(self._device):
+      with tf.name_scope(name, "Discriminator_g_l", []) as name:
+        for(src_var, dst_var) in zip(src_vars, dst_vars): 
+          sync_op = tf.assign(dst_var,src_var )  #apply the updated slave(local) network variables to the Master(global) network variables
+          sync_ops_G.append(sync_op)
+        return tf.group(*sync_ops_G, name=name)
 
 
 class Discriminator_WGAN(Discriminator):
@@ -131,8 +157,8 @@ class Discriminator_WGAN(Discriminator):
 
     self.W_ac_emb=dict()
 
-    self.W_fc3 = dict()
-    self.b_fc3 = dict()
+    #self.W_fc3 = dict()
+    #self.b_fc3 = dict()
 
 
     self.W_sc = dict()
@@ -170,14 +196,12 @@ class Discriminator_WGAN(Discriminator):
         self.t_a_flat = tf.reshape(self.t_a, [-1, 8192])
 
         # shared siamese layer
-        self.W_fc1[key] = self._fc_weight_variable([8192, 512])
-        self.b_fc1[key] = self._fc_bias_variable([512], 8192)
+        self.W_fc1[key] = self._fc_weight_variable([8192, 128]) #256
+        self.b_fc1[key] = self._fc_bias_variable([128], 8192) #256
 
-        self.W_ac_emb[key]=self._fc_weight_variable([4, 256],name='Embed')
+        self.W_ac_emb[key]=self._fc_weight_variable([4, 128],name='Embed')
 
        
-
-        
 
         ###### Action embedding Shoud concatenate this embeddings with the 
         E_ac_embed = embedding_ops.embedding_lookup(self.W_ac_emb[key], self.Actions_e)
@@ -196,9 +220,12 @@ class Discriminator_WGAN(Discriminator):
         h_fc1_a = tf.concat(values=[h_s_a_flat, h_t_a_flat], axis=1)
 
 
+
         # shared fusion layer
-        self.W_fc2[key] = self._fc_weight_variable([1024, 256])
-        self.b_fc2[key] = self._fc_bias_variable([256], 1024)
+        self.W_fc2[key] = self._fc_weight_variable([256, 128]) #256
+        self.b_fc2[key] = self._fc_bias_variable([128], 256) #256
+
+
 
         #For the expert
         h_fc2_e = tf.nn.relu(tf.matmul(h_fc1_e, self.W_fc2[key]) + self.b_fc2[key])
@@ -210,7 +237,19 @@ class Discriminator_WGAN(Discriminator):
         h_fc2_e=tf.concat(values=[h_fc2_e,E_ac_embed], axis=1)
         h_fc2_a=tf.concat(values=[h_fc2_a,A_ac_embed], axis=1)
 
+        self.W_sc[key] = self._fc_weight_variable([256, 1])
+        self.b_sc[key] = self._fc_bias_variable([1], 256)
 
+        sc_e = tf.matmul(h_fc2_e, self.W_sc[key]) + self.b_sc[key]
+        sc_a = tf.matmul(h_fc2_a, self.W_sc[key]) + self.b_sc[key]
+
+
+
+        self.sc_e[key] = tf.reshape(sc_e, [-1])
+        self.sc_a[key] = tf.reshape(sc_a, [-1])
+
+
+        '''
         for scene_scope in scene_scopes:
           # scene-specific key
           key = self._get_key([network_scope, scene_scope])
@@ -240,6 +279,7 @@ class Discriminator_WGAN(Discriminator):
 
             self.sc_e[key] = tf.reshape(sc_e, [-1])
             self.sc_a[key] = tf.reshape(sc_a, [-1])
+          '''
 
 
 
@@ -248,13 +288,18 @@ class Discriminator_WGAN(Discriminator):
     R_out = sess.run( self.sc_a[k], feed_dict = {self.s_a : state, self.t_a: target,self.Actions_a: action} )
     return R_out
 
+  def run_critic_expert(self, sess, state, target,action, scopes):
+    k = self._get_key(scopes[:-1])
+    R_out = sess.run( self.sc_e[k] , feed_dict = {self.s_e : state, self.t_e: target,self.Actions_e: action} )
+    return R_out
+
+
   def get_vars(self):
 
     var_list = [
       self.W_fc1, self.b_fc1,
       self.W_fc2, self.b_fc2,
       self.W_ac_emb,
-      self.W_fc3, self.b_fc3,
       self.W_sc, self.b_sc
       
     ]

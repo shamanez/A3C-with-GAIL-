@@ -38,8 +38,8 @@ import pdb
 
 if __name__ == '__main__':
 
-  device = "/gpu:0" if USE_GPU else "/cpu:0"
-  device2="/cpu:0"
+  device = "/gpu:0"
+  device2="/gpu:1"
   network_scope = TASK_TYPE
   list_of_tasks = TASK_LIST
   scene_scopes = list_of_tasks.keys()
@@ -106,17 +106,17 @@ if __name__ == '__main__':
                                         learning_rate_input,
                                         grad_applier,grad_applier_discriminator, MAX_TIME_STEP,
                                         device = device,
+                                        device2=device2,
                                         network_scope = "thread-%d"%(i+1),
                                         scene_scope = scene,
                                         task_scope = task)
     training_threads.append(training_thread)
 
+
   
 
 
 
-
-   
   # prepare session
   sess = tf.Session(config=tf.ConfigProto(log_device_placement=False,
                                           allow_soft_placement=True))
