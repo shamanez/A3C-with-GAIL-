@@ -1,9 +1,7 @@
-
-
 import tensorflow as tf
 import pdb
 
-class AccumTrainer(object):
+class AccumTrainer_d(object):
   def __init__(self,
                device="/cpu:0",
                name="AccumTrainer"):
@@ -57,7 +55,7 @@ class AccumTrainer(object):
         for var, grad, accum_grad in zip(self._var_list, self._grad_list, self._accum_grad_list): #assign the gradeints to the dedicated gradients variables
           with tf.name_scope("accum_" + var.op.name):
             #tf.assign_add =Update 'ref' by adding 'value' to it. This adds
-            accumulate_ops.append( tf.assign_add(accum_grad, grad) )#This operation outputs "ref" after the update is done. This makes it easier to chain operations that need to use the reset value.
+            accumulate_ops.append( tf.assign(accum_grad, grad) )#This operation outputs "ref" after the update is done. This makes it easier to chain operations that need to use the reset value.
         return tf.group(*accumulate_ops, name=name) #Create an op that groups multiple operations. 
 
   def reset_gradients(self,  name=None):  #Resetting the gradinets of the 

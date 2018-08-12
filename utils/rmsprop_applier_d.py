@@ -104,12 +104,9 @@ class RMSPropApplier_d(object):
    
     update_ops = []
 
-      
-
     with tf.device(self._device):
       with tf.control_dependencies(None): #eager execution is enabled inside this bloke
         self._create_slots(var_list) #Create slots for optimize momentumn varaibles and other rms prop variables (This is actually for creating the slots for gradiets in the global network)
-        
 
       with tf.name_scope(name, self._name, []) as name: #RMSPropApplier/
 
