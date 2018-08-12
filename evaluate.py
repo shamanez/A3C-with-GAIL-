@@ -50,7 +50,7 @@ if __name__ == '__main__':
   init = tf.global_variables_initializer()
   sess.run(init)
 
-  saver = tf.train.Saver()
+  saver = tf.train.Saver(var_list=global_network.get_vars())
   checkpoint = tf.train.get_checkpoint_state(CHECKPOINT_DIR)
 
 
@@ -75,7 +75,7 @@ if __name__ == '__main__':
   print(checkpoint_path)
 
 
-  pdb.set_trace()
+
 
   scene_stats = dict()
   for scene_scope in scene_scopes:
@@ -112,8 +112,9 @@ if __name__ == '__main__':
           env.update()
 
           terminal = env.terminal
-          if ep_t == 100: break
+          if ep_t == 1000: break
           if env.collided: ep_collision += 1
+       
           ep_reward += env.reward
           ep_t += 1
 

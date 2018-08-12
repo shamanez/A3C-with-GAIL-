@@ -47,7 +47,7 @@ TASK_LIST = {
   # 'living_room_08' : ['92', '135', '193', '228', '254']
 }
 TEST_TASK_LIST = {
-    'living_room_08': ['92', '135', '193', '228']
+    'living_room_08': ['92']
 
 }
 
